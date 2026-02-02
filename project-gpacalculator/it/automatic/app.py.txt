@@ -1,0 +1,597 @@
+"""
+Flask backend for Anna University GPA calculator - FIXED VERSION
+This version ensures subject extraction works while improving grade detection
+"""
+
+from __future__ import annotations
+import os, re, json
+from typing import Dict, List, Tuple, Optional
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
+import numpy as np
+import pandas as pd
+import cv2
+import pytesseract
+
+# --- Configuration ---
+TESSERACT_CMD = os.getenv("TESSERACT_CMD")
+if TESSERACT_CMD:
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+
+app = Flask(__name__)
+CORS(app)
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+BASE_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+# file fallbacks
+PROGPA_TXT = os.path.join(DATA_DIR, "progpa.txt")
+SUBJECTS_CSV = os.path.join(DATA_DIR, "subjects.csv")
+
+# Regexes
+SUBJECT_CODE_RE = re.compile(r"^[A-Z]{2,4}\d{3,4}$")
+SEM_VAL_RE = re.compile(r"^(0?[1-9]|10)$")
+TOTAL_CRED_RE = re.compile(r"TOTAL\s+CREDITS\s*[:\-]?\s*([\d\.]+)", re.I)
+
+# Grade mapping
+GRADE_TO_POINT = {"O": 10, "A+": 9, "A": 8, "B+": 7, "B": 6, "C": 5, "U": 0}
+GRADE_SYNONYMS = {"RA": "U", "AB": "U", "WH": "U"}
+VALID_GRADES = set(GRADE_TO_POINT.keys()) | set(GRADE_SYNONYMS.keys()) | {"W"}
+
+# --- Load dataset functions (KEEP EXACTLY AS BEFORE) ---
+
+def parse_progpa_txt(path: str) -> Tuple[Dict[str, float], Dict[str, str], Dict[str, float]]:
+    """YOUR ORIGINAL FUNCTION - DON'T CHANGE"""
+    subject_credits: Dict[str, float] = {}
+    subject_to_sem: Dict[str, str] = {}
+    semester_totals: Dict[str, float] = {}
+
+    if not os.path.exists(path):
+        return subject_credits, subject_to_sem, semester_totals
+
+    with open(path, "r", encoding="utf-8") as f:
+        lines = [ln.strip() for ln in f]
+
+    cur_sem = None
+    for ln in lines:
+        if not ln:
+            continue
+        m = re.match(r"^SEMESTER\s+(\d{1,2})\s*[:\-]?", ln, re.I)
+        if m:
+            cur_sem = str(int(m.group(1))).zfill(2)
+            continue
+        tm = TOTAL_CRED_RE.search(ln)
+        if tm and cur_sem:
+            try:
+                semester_totals[cur_sem] = float(tm.group(1))
+            except:
+                pass
+            cur_sem = None
+            continue
+        if "-" in ln and cur_sem:
+            parts = ln.split("-")
+            code = parts[0].strip().upper()
+            cred = parts[1].strip()
+            try:
+                credits = float(cred)
+            except:
+                continue
+            if SUBJECT_CODE_RE.match(code):
+                subject_credits[code] = credits
+                subject_to_sem[code] = cur_sem
+
+    return subject_credits, subject_to_sem, semester_totals
+
+# Load dataset (use your original code here)
+SUBJECT_CREDITS, SUBJECT_TO_SEM, SEMESTER_TOTALS = {}, {}, {}
+if os.path.exists(PROGPA_TXT):
+    SUBJECT_CREDITS, SUBJECT_TO_SEM, SEMESTER_TOTALS = parse_progpa_txt(PROGPA_TXT)
+elif os.path.exists(SUBJECTS_CSV):
+    # If you have load_subjects_from_csv function
+    pass
+
+# --- FIXED OCR FUNCTIONS ---
+
+def read_image_from_werkzeug(file) -> np.ndarray:
+    """ORIGINAL - KEEP"""
+    in_mem = np.frombuffer(file.read(), np.uint8)
+    img = cv2.imdecode(in_mem, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Unsupported or corrupted image. Please upload PNG/JPG/JPEG.")
+    return img
+
+def preprocess_for_ocr(img_bgr: np.ndarray) -> np.ndarray:
+    """
+    SIMPLIFIED but effective preprocessing
+    """
+    # Convert to grayscale
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    
+    # Apply CLAHE for contrast enhancement
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    gray = clahe.apply(gray)
+    
+    # Simple thresholding - often works better than complex methods
+    # Try multiple methods and choose the best
+    _, thresh1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Also try adaptive thresholding
+    thresh2 = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                   cv2.THRESH_BINARY, 11, 2)
+    
+    # Use Otsu's method by default, it's more reliable for text
+    result = thresh1
+    
+    # Scale up slightly for better OCR
+    scale = 1.5
+    result = cv2.resize(result, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    
+    # Light denoising
+    result = cv2.medianBlur(result, 1)
+    
+    return result
+
+def tesseract_words(img: np.ndarray) -> pd.DataFrame:
+    """
+    SIMPLIFIED OCR configuration - use default settings which work best
+    """
+    # Use default configuration which is most reliable
+    # config = r"--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+"
+    
+    # Actually, let's try WITHOUT whitelist first to capture everything
+    data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DATAFRAME, 
+                                     lang="eng", config="--oem 3 --psm 6")
+    
+    if data is None or data.empty:
+        return pd.DataFrame(columns=["text", "conf", "left", "top", "width", "height", 
+                                     "line_num", "block_num", "par_num"])
+    
+    df = data.dropna(subset=["text"]).copy()
+    df["text"] = df["text"].astype(str).str.strip()
+    df["conf"] = pd.to_numeric(df["conf"], errors="coerce").fillna(-1).astype(int)
+    df = df[df["text"] != ""]
+    
+    # Debug: print what OCR found
+    print(f"OCR extracted {len(df)} text items")
+    print("Sample text:", df["text"].head(20).tolist())
+    
+    return df
+
+# --- IMPROVED GRADE NORMALIZATION (BUT SIMPLE) ---
+
+def normalize_grade(g: str) -> Optional[str]:
+    """
+    SIMPLIFIED but effective grade normalization
+    """
+    if not g:
+        return None
+    
+    g = g.strip().upper()
+    
+    # Remove any spaces within the grade
+    g = g.replace(" ", "")
+    
+    # Common OCR misreadings and their corrections
+    corrections = {
+        "0": "O",           # Zero mistaken for O
+        "APLUS": "A+",
+        "A-PLUS": "A+",
+        "BPLUS": "B+",
+        "CPLUS": "C+",
+        "O0": "O",
+        "0O": "O",
+        "OO": "O",
+        "RA": "U",
+        "AB": "U", 
+        "WH": "U",
+        "A+": "A+",
+        "B+": "B+",
+        "C+": "C+",
+    }
+    
+    # Check direct mapping first
+    if g in corrections:
+        return corrections[g]
+    
+    # Check if it's already a valid grade
+    if g in VALID_GRADES:
+        return g
+    
+    # Handle single character grades
+    if len(g) == 1:
+        if g in "OABCUW":
+            return g
+        elif g == "0":
+            return "O"
+    
+    # Handle grade with plus
+    if len(g) == 2 and g[1] == "+" and g[0] in "ABC":
+        return g
+    
+    # If it contains "O" or looks like a grade, try to extract
+    if "O" in g or "A" in g or "B" in g or "C" in g:
+        # Extract the first character if it's O/A/B/C
+        first_char = g[0]
+        if first_char in "OABCU":
+            return first_char
+    
+    return None
+
+# --- SIMPLIFIED EXTRACTION LOGIC ---
+
+def find_rows_subjects_and_grades(df: pd.DataFrame) -> List[Dict]:
+    """
+    SIMPLIFIED extraction - focuses on getting subjects first
+    """
+    rows = []
+    
+    if df.empty:
+        print("OCR DataFrame is empty!")
+        return rows
+    
+    # Group by lines (your original approach)
+    for (block_num, par_num, line_num), line_df in df.groupby(["block_num", "par_num", "line_num"], sort=True):
+        line_df = line_df.sort_values("left")
+        tokens = line_df.to_dict("records")
+        
+        if not tokens:
+            continue
+        
+        # DEBUG: Print line content
+        line_text = " ".join([t["text"] for t in tokens])
+        print(f"Line {line_num}: {line_text}")
+        
+        # Find subject codes in this line
+        subjects_in_line = []
+        for t in tokens:
+            text = t["text"].strip().upper()
+            # Clean the text - remove any non-alphanumeric except +
+            text_clean = re.sub(r'[^A-Z0-9+]', '', text)
+            
+            # Check if it's a subject code
+            if SUBJECT_CODE_RE.match(text_clean):
+                subjects_in_line.append({
+                    "code": text_clean,
+                    "token": t,
+                    "position": t["left"]
+                })
+        
+        # Find grades in this line
+        grades_in_line = []
+        for t in tokens:
+            text = t["text"].strip()
+            grade = normalize_grade(text)
+            if grade:
+                grades_in_line.append({
+                    "grade": grade,
+                    "token": t,
+                    "position": t["left"]
+                })
+        
+        # Match subjects with grades
+        for subject in subjects_in_line:
+            best_grade = None
+            best_conf = -1
+            
+            if grades_in_line:
+                # Find the grade that's closest to the right of the subject
+                # Look for grades to the right first
+                grades_to_right = [g for g in grades_in_line if g["position"] > subject["position"]]
+                
+                if grades_to_right:
+                    # Take the closest grade to the right
+                    closest_grade = min(grades_to_right, key=lambda g: abs(g["position"] - subject["position"]))
+                    best_grade = closest_grade["grade"]
+                    best_conf = int(closest_grade["token"].get("conf", -1))
+                else:
+                    # No grade to the right, take the closest overall
+                    closest_grade = min(grades_in_line, key=lambda g: abs(g["position"] - subject["position"]))
+                    best_grade = closest_grade["grade"]
+                    best_conf = int(closest_grade["token"].get("conf", -1))
+            
+            # SPECIAL CASE: Check if there's a "0" or empty that might be "O"
+            if not best_grade:
+                # Look for tokens that might be misread "O"
+                for t in tokens:
+                    text = t["text"].strip()
+                    if text in ["0", "", "O", "o"] and abs(t["left"] - subject["position"]) < 200:
+                        best_grade = "O"  # Assume it's O grade
+                        best_conf = int(t.get("conf", -1))
+                        break
+            
+            rows.append({
+                "subject_code": subject["code"],
+                "grade": best_grade,
+                "code_conf": int(subject["token"].get("conf", -1)),
+                "grade_conf": best_conf,
+                "row_sem": None
+            })
+    
+    print(f"Total subjects extracted: {len(rows)}")
+    for row in rows:
+        print(f"  {row['subject_code']}: {row['grade']} (code_conf: {row['code_conf']}, grade_conf: {row['grade_conf']})")
+    
+    return rows
+
+def extract_semester_global(df: pd.DataFrame) -> Optional[str]:
+    """ORIGINAL FUNCTION - KEEP"""
+    up = df["text"].str.upper()
+    sem_rows = df[up.str.contains(r"\bSEM\b|\bSEMESTER\b", regex=True, na=False)]
+    candidates = []
+    
+    def find_near(rows):
+        for _, r in rows.iterrows():
+            cx, cy = int(r.left + r.width // 2), int(r.top + r.height // 2)
+            near = df[df.left.between(cx - 180, cx + 180) & df.top.between(cy - 60, cy + 60)]
+            for t in near["text"].astype(str):
+                t2 = t.strip()
+                if SEM_VAL_RE.fullmatch(t2):
+                    candidates.append(str(int(t2)).zfill(2))
+    
+    if not sem_rows.empty:
+        find_near(sem_rows)
+    
+    if not candidates:
+        for _, group in df.groupby(["block_num", "par_num", "line_num"]):
+            joined = " ".join(group["text"].astype(str)).upper()
+            if "SEM" in joined or "SEMESTER" in joined:
+                for tok in group["text"].astype(str):
+                    if SEM_VAL_RE.fullmatch(tok.strip()):
+                        candidates.append(str(int(tok)).zfill(2))
+    
+    return candidates[0] if candidates else None
+
+# --- COMPUTE FUNCTIONS (KEEP YOUR ORIGINAL) ---
+
+def compute_gpa_for_sem(rows: List[Dict], selected_semester: str) -> Dict:
+    """YOUR ORIGINAL FUNCTION - DON'T CHANGE"""
+    selected_semester = str(int(selected_semester)).zfill(2)
+    warnings = []
+    included = []
+
+    for r in rows:
+        code = (r.get("subject_code") or "").strip().upper()
+        if not code:
+            continue
+        # ignore NM codes entirely
+        if code.startswith("NM"):
+            warnings.append(f"Ignored NM code: {code}")
+            continue
+        grade_raw = (r.get("grade") or "")
+        grade = normalize_grade(grade_raw)
+        # prefer dataset mapping to decide whether this subject belongs to selected_semister
+        data_sem = SUBJECT_TO_SEM.get(code)
+        if data_sem:
+            if data_sem != selected_semester:
+                # subject belongs to some other semester -> ignore (previous-sem arrear)
+                warnings.append(f"Ignored {code} since it belongs to semester {data_sem}")
+                continue
+            # else include, get credits from dataset
+            credits = SUBJECT_CREDITS.get(code)
+            if credits is None:
+                warnings.append(f"No credits found for {code} in dataset despite sem mapping; skipping")
+                continue
+            included.append({"subject_code": code, "grade": grade, "credits": credits})
+        else:
+            # not in dataset
+            # if selected_semester >= 05 -> assume elective credit 3 and include
+            if int(selected_semester) >= 5:
+                credits = 3.0
+                included.append({"subject_code": code, "grade": grade, "credits": credits, "note": "assumed elective credit=3"})
+            else:
+                warnings.append(f"Subject {code} not in dataset; ignored (not an elective for sem < 05)")
+                continue
+
+    # Check arrears in included (current semester)
+    arrear_present = False
+    arrear_codes = []
+    for it in included:
+        g = it.get("grade")
+        # If grade is None or normalized to None -> treat as unknown (will warn later)
+        if g == "U":
+            arrear_present = True
+            arrear_codes.append(it["subject_code"])
+    if arrear_present:
+        return {
+            "error": "arrear_in_current_semester",
+            "message": "You have arrears in this semester; GPA cannot be calculated.",
+            "arrear_subjects": arrear_codes,
+            "warnings": warnings
+        }
+
+    # Now compute GPA: exclude W (withdrawal)
+    total_weighted = 0.0
+    total_credits = 0.0
+    details = []
+    for it in included:
+        code = it["subject_code"]
+        credits = float(it["credits"])
+        grade = it.get("grade")
+        if grade is None:
+            # unknown grade -> skip
+            details.append({"subject_code": code, "credits": credits, "grade": None, "note": "grade not recognized"})
+            continue
+        if grade == "W":
+            details.append({"subject_code": code, "credits": credits, "grade": grade, "note": "withdrawal excluded from GPA"})
+            continue
+        gp = GRADE_TO_POINT.get(grade)
+        if gp is None:
+            details.append({"subject_code": code, "credits": credits, "grade": grade, "note": "grade not in map"})
+            continue
+        weighted = credits * float(gp)
+        total_weighted += weighted
+        total_credits += credits
+        details.append({"subject_code": code, "credits": credits, "grade": grade, "grade_point": gp, "weighted": round(weighted, 3)})
+
+    gpa = round(total_weighted / total_credits, 2) if total_credits > 0 else None
+
+    expected_total = SEMESTER_TOTALS.get(selected_semester)
+    mismatch = None
+    if expected_total is not None:
+        mismatch = round(expected_total - total_credits, 3)
+
+    return {
+        "details": details,
+        "totals": {"weighted_sum": round(total_weighted, 3), "credits_sum": round(total_credits, 3), "gpa": gpa},
+        "expected_semester_credits": expected_total,
+        "credit_mismatch": mismatch,
+        "warnings": warnings
+    }
+
+# --- API ENDPOINTS ---
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    return jsonify({
+        "ok": True,
+        "subjects_loaded": len(SUBJECT_CREDITS),
+        "semester_totals_loaded": len(SEMESTER_TOTALS),
+        "dataset_sample": list(SUBJECT_CREDITS.items())[:5] if SUBJECT_CREDITS else []
+    })
+
+@app.route("/api/extract", methods=["POST"])
+def api_extract():
+    """
+    FIXED extraction endpoint
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "Upload a file field named 'file'"}), 400
+    
+    f = request.files["file"]
+    if f.filename == "":
+        return jsonify({"error": "Empty filename"}), 400
+    
+    try:
+        print(f"Processing file: {f.filename}")
+        
+        # Read image
+        img = read_image_from_werkzeug(f)
+        print(f"Image shape: {img.shape}")
+        
+        # Preprocess
+        proc = preprocess_for_ocr(img)
+        
+        # Perform OCR
+        df = tesseract_words(proc)
+        
+        if df.empty:
+            return jsonify({
+                "error": "No text found in image",
+                "advice": "Try uploading a clearer image or check if the image contains text"
+            }), 400
+        
+        # Extract semester
+        global_sem = extract_semester_global(df)
+        
+        # Extract subjects and grades
+        rows = find_rows_subjects_and_grades(df)
+        
+        # Prepare response
+        out_rows = []
+        for r in rows:
+            out_rows.append({
+                "subject_code": r["subject_code"],
+                "grade": r["grade"],
+                "row_sem": r.get("row_sem"),
+                "code_conf": r.get("code_conf", -1),
+                "grade_conf": r.get("grade_conf", -1)
+            })
+        
+        return jsonify({
+            "success": True,
+            "semester_detected": global_sem,
+            "extracted_rows": out_rows,
+            "debug_info": {
+                "total_ocr_items": len(df),
+                "unique_text_samples": df["text"].head(10).tolist()
+            },
+            "note": "Use /api/compute with semester parameter to calculate GPA"
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"Error in extraction: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            "error": str(e),
+            "debug": "Check server logs for details"
+        }), 500
+
+@app.route("/api/compute", methods=["POST"])
+def api_compute():
+    """YOUR ORIGINAL - KEEP"""
+    try:
+        payload = request.get_json(force=True)
+        semester = payload.get("semester")
+        if not semester:
+            return jsonify({"error": "Provide 'semester' (e.g., '04') in request body."}), 400
+        semester = str(int(semester)).zfill(2)
+        rows = payload.get("rows", [])
+        # sanitize rows to internal format
+        clean = []
+        for r in rows:
+            code = (r.get("subject_code") or "").strip().upper()
+            grade = (r.get("grade") or "").strip().upper()
+            row_sem = r.get("row_sem")
+            clean.append({"subject_code": code, "grade": grade, "row_sem": row_sem})
+        result = compute_gpa_for_sem(clean, semester)
+        return jsonify({"semester": semester, "result": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route("/api/debug_ocr", methods=["POST"])
+def debug_ocr():
+    """
+    NEW: Debug endpoint to see what OCR is actually extracting
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    
+    f = request.files["file"]
+    
+    try:
+        img = read_image_from_werkzeug(f)
+        proc = preprocess_for_ocr(img)
+        
+        # Get raw OCR text without filtering
+        raw_text = pytesseract.image_to_string(proc, config="--oem 3 --psm 6")
+        
+        # Get dataframe
+        df = tesseract_words(proc)
+        
+        return jsonify({
+            "raw_ocr_text": raw_text,
+            "dataframe_sample": df.head(50).to_dict("records"),
+            "all_unique_text": df["text"].unique().tolist()[:50],
+            "stats": {
+                "total_items": len(df),
+                "avg_confidence": df["conf"].mean() if not df.empty else 0
+            }
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Anna University GPA Calculator")
+    print("=" * 60)
+    print(f"Loaded subjects: {len(SUBJECT_CREDITS)}")
+    print(f"Loaded semester totals: {len(SEMESTER_TOTALS)}")
+    
+    # Print sample data for debugging
+    if SUBJECT_CREDITS:
+        print("\nSample subjects from dataset:")
+        for i, (code, credits) in enumerate(list(SUBJECT_CREDITS.items())[:5]):
+            sem = SUBJECT_TO_SEM.get(code, "Unknown")
+            print(f"  {code}: {credits} credits (Semester {sem})")
+    
+    print("\nServer starting on http://0.0.0.0:5000")
+    print("=" * 60)
+    
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)

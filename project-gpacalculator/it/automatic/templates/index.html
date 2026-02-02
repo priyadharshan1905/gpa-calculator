@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anna University GPA Calculator</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <i class="fas fa-graduation-cap"></i>
+                <h1>Anna University GPA Calculator</h1>
+            </div>
+            <p class="subtitle">Calculate your semester GPA with ease and precision</p>
+        </header>
+
+        <div class="options-container">
+            <div class="option-card" id="upload-option">
+                <i class="fas fa-file-upload"></i>
+                <h2>Upload Results File</h2>
+                <p>Upload your official result file for automatic calculation</p>
+            </div>
+            <div class="option-card" id="manual-option">
+                <i class="fas fa-keyboard"></i>
+                <h2>Manual Entry</h2>
+                <p>Enter your subject codes and grades manually</p>
+            </div>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="calculator-section" id="upload-section" style="display: none;">
+            <div class="semester-selector">
+                <label for="semester">Select Semester:</label>
+                <select id="semester">
+                    <option value="1">Semester 1</option>
+                    <option value="2">Semester 2</option>
+                    <option value="3">Semester 3</option>
+                    <option value="4" selected>Semester 4</option>
+                    <option value="5">Semester 5</option>
+                    <option value="6">Semester 6</option>
+                    <option value="7">Semester 7</option>
+                    <option value="8">Semester 8</option>
+                </select>
+            </div>
+
+            <div class="upload-container">
+                <div class="upload-area" onclick="document.getElementById('file').click()">
+                    <i class="fas fa-cloud-upload-alt upload-icon"></i>
+                    <h3>Drag & Drop or Click to Upload</h3>
+                    <p>Supported formats: JPG, PNG, JPEG, PDF</p>
+                    <button class="upload-btn">Choose File</button>
+                    <input type="file" id="file" accept="image/*,application/pdf" style="display: none;">
+                </div>
+                <button class="action-btn" onclick="extractData()" id="extract-btn">
+                    <i class="fas fa-cogs"></i> Extract Data
+                </button>
+            </div>
+
+            <div class="results-container">
+                <div class="table-header">
+                    <h2><i class="fas fa-list"></i> Extracted Subjects</h2>
+                    <button class="add-subject-btn" onclick="addNewSubject()">
+                        <i class="fas fa-plus"></i> Add Subject
+                    </button>
+                </div>
+                
+                <div class="table-container">
+                    <table id="subjects-table">
+                        <thead>
+                            <tr>
+                                <th>No</th>
+                                <th>Subject Code</th>
+                                <th>Grade</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="subjects-body">
+                            <!-- Rows will be added here -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="table-footer">
+                    <div class="subject-count">
+                        <i class="fas fa-book"></i>
+                        <span id="subject-count">0</span> Subjects
+                    </div>
+                    <div class="gpa-controls">
+                        <button class="gpa-btn" onclick="computeGPA()">
+                            <i class="fas fa-calculator"></i> Calculate GPA
+                        </button>
+                        <button class="reset-btn" onclick="resetCalculator()">
+                            <i class="fas fa-redo"></i> Reset All
+                        </button>
+                    </div>
+                </div>
+
+                <div class="result-display" id="result-display">
+                    <!-- Results will be shown here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Manual Entry Section -->
+        <div class="departments-section" id="manual-departments-section" style="display: none;">
+            <h2>Select Your Department (Manual Entry)</h2>
+            <div class="departments-grid">
+                <a href="/it-manual" class="department-card">
+                    <i class="fas fa-laptop-code"></i>
+                    <h3>Information Technology</h3>
+                </a>
+                <div class="department-card" onclick="alert('Manual entry for other departments coming soon!')">
+                    <i class="fas fa-computer"></i>
+                    <h3>Computer Science</h3>
+                </div>
+                <div class="department-card" onclick="alert('Manual entry for other departments coming soon!')">
+                    <i class="fas fa-robot"></i>
+                    <h3>AI & Data Science</h3>
+                </div>
+                <div class="department-card" onclick="alert('Manual entry for other departments coming soon!')">
+                    <i class="fas fa-bolt"></i>
+                    <h3>Electronics & Communication</h3>
+                </div>
+                <div class="department-card" onclick="alert('Manual entry for other departments coming soon!')">
+                    <i class="fas fa-microchip"></i>
+                    <h3>Electrical & Electronics</h3>
+                </div>
+                <div class="department-card" onclick="alert('Manual entry for other departments coming soon!')">
+                    <i class="fas fa-cogs"></i>
+                    <h3>Mechanical Engineering</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subject Edit Modal -->
+    <div class="modal" id="subject-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-edit"></i> Edit Subject</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="edit-subject-code">Subject Code</label>
+                    <input type="text" id="edit-subject-code" placeholder="e.g., CS3451" maxlength="10">
+                </div>
+                <div class="form-group">
+                    <label for="edit-grade">Grade</label>
+                    <select id="edit-grade">
+                        <option value="">Select Grade</option>
+                        <option value="10">O (10 points)</option>
+                        <option value="9">A+ (9 points)</option>
+                        <option value="8">A (8 points)</option>
+                        <option value="7">B+ (7 points)</option>
+                        <option value="6">B (6 points)</option>
+                        <option value="5">C (5 points)</option>
+                        <option value="0">F (0 points)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn cancel-btn" onclick="closeModal()">Cancel</button>
+                <button class="modal-btn save-btn" onclick="saveSubject()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>© 2023 Anna University GPA Calculator | For official use only</p>
+    </footer>
+
+    <script>
+        // Subject database (same as in Python backend)
+        const subjectDatabase = {
+            "1": {"HS3152": 3, "MA3151": 4, "PH3151": 3, "CY3151": 3, "GE3151": 3, "GE3152": 1, "GE3171": 2, "BS3171": 2, "GE3172": 1},
+            "2": {"HS3252": 2, "MA3251": 4, "PH3256": 3, "BE3251": 3, "GE3251": 4, "CS3251": 3, "GE3252": 1, "GE3271": 2, "CS3271": 2, "GE3272": 2},
+            "3": {"MA3354": 4, "CS3351": 4, "CS3352": 3, "CD3291": 3, "CS3391": 3, "CD3281": 2, "CS3381": 1.5, "CS3361": 2, "GE3361": 1},
+            "4": {"CS3452": 3, "CS3491": 4, "CS3492": 3, "IT3401": 4, "CS3451": 3, "GE3451": 2, "CS3461": 1.5, "CS3481": 1.5},
+            "5": {"CS3591": 4, "IT3501": 3, "CS3551": 3, "CS3691": 4, "IT3511": 2},
+            "6": {"CCS356": 4, "IT3681": 1.5},
+            "7": {"GE3791": 2, "IT3711": 2},
+            "8": {"IT3811": 10}
+        };
+
+        // Elective courses (first 20 for autocomplete)
+        const electiveCourses = [
+            "GE3751", "GE3752", "GE3753", "GE3754", "GE3755", "GE3792", "CCS346", "CCS360", 
+            "CCS355", "CCS369", "CCW331", "CCS349", "CCS338", "CCS334", "CCS335", "CCS332", 
+            "CCS336", "CCS370", "CCS366", "CCS374"
+        ];
+
+        let extractedRows = [];
+        let currentMode = null;
+        let editingIndex = -1;
+
+        // Navigation
+        document.getElementById('upload-option').addEventListener('click', function() {
+            currentMode = 'upload';
+            document.getElementById('upload-section').style.display = 'block';
+            document.getElementById('manual-departments-section').style.display = 'none';
+            document.getElementById('upload-section').scrollIntoView({ behavior: 'smooth' });
+        });
+
+        document.getElementById('manual-option').addEventListener('click', function() {
+            currentMode = 'manual';
+            document.getElementById('upload-section').style.display = 'none';
+            document.getElementById('manual-departments-section').style.display = 'block';
+            document.getElementById('manual-departments-section').scrollIntoView({ behavior: 'smooth' });
+        });
+
+        // File Upload Functions
+        async function extractData() {
+            const fileInput = document.getElementById('file');
+            if (!fileInput.files.length) {
+                showError('Please select a file first.');
+                return;
+            }
+
+            const extractBtn = document.getElementById('extract-btn');
+            extractBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+            extractBtn.disabled = true;
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/api/extract', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                extractedRows = data.extracted_rows || [];
+                updateSubjectsTable();
+                showSuccess('Data extracted successfully! Review and edit if needed.');
+                
+                if (data.semester_detected) {
+                    document.getElementById('semester').value = data.semester_detected;
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
+            } finally {
+                extractBtn.innerHTML = '<i class="fas fa-cogs"></i> Extract Data';
+                extractBtn.disabled = false;
+            }
+        }
+
+        function updateSubjectsTable() {
+            const tbody = document.getElementById('subjects-body');
+            tbody.innerHTML = '';
+            
+            extractedRows.forEach((row, index) => {
+                const tr = document.createElement('tr');
+                
+                // Serial Number
+                const tdNo = document.createElement('td');
+                tdNo.textContent = index + 1;
+                
+                // Subject Code (editable)
+                const tdCode = document.createElement('td');
+                const codeDiv = document.createElement('div');
+                codeDiv.className = 'subject-code-display';
+                codeDiv.innerHTML = `
+                    <span class="subject-code">${row.subject_code || 'N/A'}</span>
+                    <button class="edit-icon" onclick="editSubject(${index})">
+                        <i class="fas fa-pencil-alt"></i>
+                    </button>
+                `;
+                tdCode.appendChild(codeDiv);
+                
+                // Grade Dropdown (using correct grade points)
+                const tdGrade = document.createElement('td');
+                const gradeSelect = document.createElement('select');
+                gradeSelect.className = 'grade-select-input';
+                gradeSelect.innerHTML = `
+                    <option value="">Select Grade</option>
+                    <option value="10" ${row.grade === '10' ? 'selected' : ''}>O (10)</option>
+                    <option value="9" ${row.grade === '9' ? 'selected' : ''}>A+ (9)</option>
+                    <option value="8" ${row.grade === '8' ? 'selected' : ''}>A (8)</option>
+                    <option value="7" ${row.grade === '7' ? 'selected' : ''}>B+ (7)</option>
+                    <option value="6" ${row.grade === '6' ? 'selected' : ''}>B (6)</option>
+                    <option value="5" ${row.grade === '5' ? 'selected' : ''}>C (5)</option>
+                    <option value="0" ${row.grade === '0' ? 'selected' : ''}>F (0)</option>
+                `;
+                gradeSelect.onchange = (e) => {
+                    extractedRows[index].grade = e.target.value;
+                };
+                tdGrade.appendChild(gradeSelect);
+                
+                // Actions
+                const tdActions = document.createElement('td');
+                tdActions.innerHTML = `
+                    <button class="table-btn edit-btn" onclick="editSubject(${index})">
+                        <i class="fas fa-edit"></i> Edit
+                    </button>
+                    <button class="table-btn delete-btn" onclick="removeSubject(${index})">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                `;
+                
+                tr.appendChild(tdNo);
+                tr.appendChild(tdCode);
+                tr.appendChild(tdGrade);
+                tr.appendChild(tdActions);
+                tbody.appendChild(tr);
+            });
+            
+            updateSubjectCount();
+        }
+
+        function updateSubjectCount() {
+            document.getElementById('subject-count').textContent = extractedRows.length;
+        }
+
+        function addNewSubject() {
+            extractedRows.push({
+                subject_code: '',
+                grade: '',
+                row_sem: null
+            });
+            updateSubjectsTable();
+            
+            // Scroll to the new row
+            const tbody = document.getElementById('subjects-body');
+            const lastRow = tbody.lastChild;
+            if (lastRow) {
+                lastRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        function editSubject(index) {
+            editingIndex = index;
+            const row = extractedRows[index];
+            
+            document.getElementById('edit-subject-code').value = row.subject_code || '';
+            document.getElementById('edit-grade').value = row.grade || '';
+            
+            document.getElementById('subject-modal').style.display = 'flex';
+        }
+
+        function saveSubject() {
+            if (editingIndex >= 0 && editingIndex < extractedRows.length) {
+                const subjectCode = document.getElementById('edit-subject-code').value.trim().toUpperCase();
+                const grade = document.getElementById('edit-grade').value;
+                
+                if (!subjectCode) {
+                    showError('Please enter a subject code');
+                    return;
+                }
+                
+                // Validate subject code format
+                const subjectCodeRegex = /^[A-Z]{2,4}\d{3,4}$/;
+                if (!subjectCodeRegex.test(subjectCode)) {
+                    showError('Invalid subject code format. Example: CS3451');
+                    return;
+                }
+                
+                extractedRows[editingIndex].subject_code = subjectCode;
+                extractedRows[editingIndex].grade = grade;
+                
+                updateSubjectsTable();
+                closeModal();
+                showSuccess('Subject updated successfully!');
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('subject-modal').style.display = 'none';
+            editingIndex = -1;
+        }
+
+        function removeSubject(index) {
+            if (confirm('Are you sure you want to remove this subject?')) {
+                extractedRows.splice(index, 1);
+                updateSubjectsTable();
+                showSuccess('Subject removed successfully!');
+            }
+        }
+
+        async function computeGPA() {
+            if (extractedRows.length === 0) {
+                showError('No subjects to calculate. Please add subjects first.');
+                return;
+            }
+
+            // Validate all rows before sending
+            const validRows = extractedRows.filter(row => row.subject_code && row.grade);
+            if (validRows.length === 0) {
+                showError('Please ensure all subjects have both code and grade.');
+                return;
+            }
+
+            const semester = document.getElementById('semester').value;
+            const resultDiv = document.getElementById('result-display');
+            
+            resultDiv.innerHTML = `
+                <div class="loading">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <p>Calculating GPA...</p>
+                </div>
+            `;
+
+            try {
+                const response = await fetch('/api/compute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        semester: semester, 
+                        rows: extractedRows
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    showError(data.message);
+                    return;
+                }
+
+                const gpa = data.gpa;
+                const credits = data.total_credits;
+                const details = data.details || [];
+                
+                // Build detailed results
+                let detailsHtml = '';
+                if (details.length > 0) {
+                    const validDetails = details.filter(d => d.grade_point !== undefined);
+                    detailsHtml = `
+                        <div class="result-details">
+                            <h4><i class="fas fa-info-circle"></i> Calculation Details:</h4>
+                            <div class="details-scroll">
+                                <table class="details-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Subject Code</th>
+                                            <th>Credits</th>
+                                            <th>Grade</th>
+                                            <th>Grade Point</th>
+                                            <th>Weighted</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${validDetails.map(detail => `
+                                            <tr>
+                                                <td>${detail.subject_code || 'N/A'}</td>
+                                                <td>${detail.credits || '0'}</td>
+                                                <td>${detail.grade || 'N/A'}</td>
+                                                <td>${detail.grade_point || '0'}</td>
+                                                <td>${detail.weighted_points || '0'}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                // Check for arrears
+                const hasArrear = details.some(d => d.grade === 'F' || d.grade_point === 0);
+                
+                resultDiv.innerHTML = `
+                    <div class="gpa-result ${hasArrear ? 'arrear-warning' : ''}">
+                        ${hasArrear ? `
+                            <div class="arrear-alert">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <h4>Arrear Detected!</h4>
+                                <p>You have failed in one or more subjects. GPA cannot be calculated.</p>
+                            </div>
+                        ` : ''}
+                        
+                        ${!hasArrear ? `
+                            <div class="gpa-icon">
+                                <i class="fas fa-trophy"></i>
+                            </div>
+                            <div class="gpa-value">${gpa}</div>
+                            <div class="gpa-label">Your GPA for Semester ${semester}</div>
+                            <div class="gpa-summary">
+                                <div class="summary-item">
+                                    <i class="fas fa-layer-group"></i>
+                                    <span>Total Credits: <strong>${credits}</strong></span>
+                                </div>
+                                <div class="summary-item">
+                                    <i class="fas fa-book"></i>
+                                    <span>Subjects: <strong>${validRows.length}</strong></span>
+                                </div>
+                            </div>
+                        ` : ''}
+                        
+                        ${detailsHtml}
+                        
+                        ${!hasArrear ? `
+                            <div class="result-actions">
+                                <button class="share-btn" onclick="shareResults()">
+                                    <i class="fas fa-share"></i> Share Results
+                                </button>
+                                <button class="print-btn" onclick="window.print()">
+                                    <i class="fas fa-print"></i> Print
+                                </button>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+                
+                resultDiv.scrollIntoView({ behavior: 'smooth' });
+                
+            } catch (error) {
+                showError('Calculation error: ' + error.message);
+            }
+        }
+
+        function resetCalculator() {
+            if (extractedRows.length > 0 && !confirm('Are you sure you want to reset all data?')) {
+                return;
+            }
+            
+            extractedRows = [];
+            document.getElementById('file').value = '';
+            document.getElementById('subjects-body').innerHTML = '';
+            document.getElementById('result-display').innerHTML = '';
+            document.getElementById('semester').value = '4';
+            updateSubjectCount();
+            showSuccess('Calculator reset successfully!');
+        }
+
+        function showError(message) {
+            const resultDiv = document.getElementById('result-display');
+            resultDiv.innerHTML = `
+                <div class="error-message">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <div>
+                        <h4>Error</h4>
+                        <p>${message}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function showSuccess(message) {
+            const resultDiv = document.getElementById('result-display');
+            resultDiv.innerHTML = `
+                <div class="success-message">
+                    <i class="fas fa-check-circle"></i>
+                    <div>
+                        <h4>Success</h4>
+                        <p>${message}</p>
+                    </div>
+                </div>
+            `;
+            
+            setTimeout(() => {
+                if (resultDiv.innerHTML.includes('success-message')) {
+                    resultDiv.innerHTML = '';
+                }
+            }, 3000);
+        }
+
+        function shareResults() {
+            const gpa = document.querySelector('.gpa-value')?.textContent;
+            const semester = document.getElementById('semester').value;
+            if (gpa) {
+                const text = `I achieved a GPA of ${gpa} in Semester ${semester} at Anna University!`;
+                if (navigator.share) {
+                    navigator.share({
+                        title: 'My GPA Results',
+                        text: text,
+                        url: window.location.href
+                    });
+                } else {
+                    navigator.clipboard.writeText(text);
+                    alert('Results copied to clipboard!');
+                }
+            }
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('subject-modal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+</html>
