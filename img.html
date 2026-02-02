@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anna University Result Scanner</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.3/dist/tesseract.min.js"></script>
+    <style>
+        /* Your existing black theme styles would go here */
+        .upload-container {
+            /* Styling for upload area */
+        }
+        .extracted-data {
+            /* Styling for extracted data table */
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Upload Your Result</h1>
+        
+        <div class="upload-container">
+            <input type="file" id="result-image" accept="image/*">
+            <button onclick="processImage()">Extract Data</button>
+        </div>
+        
+        <div class="extracted-data" id="extracted-data" style="display: none;">
+            <h2>Extracted Subjects & Grades</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Subject Code</th>
+                        <th>Grade</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="result-table">
+                    <!-- Extracted data will appear here -->
+                </tbody>
+            </table>
+            <button onclick="calculateGPA()">Calculate GPA</button>
+        </div>
+    </div>
+
+    <script>
+        async function processImage() {
+            const fileInput = document.getElementById('result-image');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select an image file');
+                return;
+            }
+            
+            // Show loading indicator
+            showLoading();
+            
+            try {
+                // Preprocess image for better OCR
+                const processedImage = await preprocessImage(file);
+                
+                // Perform OCR
+                const result = await Tesseract.recognize(
+                    processedImage,
+                    'eng', // English language
+                    { 
+                        logger: m => console.log(m),
+                        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ' // Limit characters to expect
+                    }
+                );
+                
+                // Parse the extracted text
+                const extractedData = parseResultText(result.data.text);
+                
+                // Display extracted data for editing
+                displayExtractedData(extractedData);
+                
+            } catch (error) {
+                console.error('Error processing image:', error);
+                alert('Error processing image. Please try again with a clearer image.');
+            } finally {
+                hideLoading();
+            }
+        }
+        
+        function preprocessImage(file) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                const url = URL.createObjectURL(file);
+                
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Set canvas dimensions
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    
+                    // Draw image on canvas
+                    ctx.drawImage(img, 0, 0);
+                    
+                    // Apply image processing to improve OCR
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const processedData = enhanceContrast(imageData);
+                    
+                    ctx.putImageData(processedData, 0, 0);
+                    
+                    // Convert back to data URL
+                    resolve(canvas.toDataURL('image/jpeg'));
+                    
+                    // Clean up
+                    URL.revokeObjectURL(url);
+                };
+                
+                img.src = url;
+            });
+        }
+        
+        function parseResultText(text) {
+            // This function would contain Anna University-specific parsing logic
+            // It would look for patterns like:
+            // - Subject codes (e.g., CS101, MA102)
+            // - Grades (e.g., A+, B, O)
+            
+            const subjects = [];
+            const lines = text.split('\n');
+            
+            for (const line of lines) {
+                // Anna University specific pattern matching
+                const subjectMatch = line.match(/([A-Z]{2}\d{4})/); // Pattern for subject codes
+                const gradeMatch = line.match(/\b(O|A\+|A|B\+|B|C|F|AB|P|RA|SA)\b/i); // Grade patterns
+                
+                if (subjectMatch && gradeMatch) {
+                    subjects.push({
+                        code: subjectMatch[1],
+                        grade: gradeMatch[1].toUpperCase(),
+                        editable: true
+                    });
+                }
+            }
+            
+            return subjects;
+        }
+        
+        function displayExtractedData(subjects) {
+            const tableBody = document.getElementById('result-table');
+            tableBody.innerHTML = '';
+            
+            subjects.forEach((subject, index) => {
+                const row = document.createElement('tr');
+                
+                row.innerHTML = `
+                    <td>
+                        <input type="text" value="${subject.code}" 
+                               onchange="updateSubject(${index}, 'code', this.value)"
+                               ${subject.editable ? '' : 'readonly'}>
+                    </td>
+                    <td>
+                        <select onchange="updateSubject(${index}, 'grade', this.value)">
+                            <option value="O" ${subject.grade === 'O' ? 'selected' : ''}>O</option>
+                            <option value="A+" ${subject.grade === 'A+' ? 'selected' : ''}>A+</option>
+                            <option value="A" ${subject.grade === 'A' ? 'selected' : ''}>A</option>
+                            <option value="B+" ${subject.grade === 'B+' ? 'selected' : ''}>B+</option>
+                            <option value="B" ${subject.grade === 'B' ? 'selected' : ''}>B</option>
+                            <option value="C" ${subject.grade === 'C' ? 'selected' : ''}>C</option>
+                            <option value="F" ${subject.grade === 'F' ? 'selected' : ''}>F</option>
+                        </select>
+                    </td>
+                    <td>
+                        <button onclick="removeSubject(${index})">Remove</button>
+                    </td>
+                `;
+                
+                tableBody.appendChild(row);
+            });
+            
+            document.getElementById('extracted-data').style.display = 'block';
+        }
+        
+        function updateSubject(index, field, value) {
+            // Update the subject data
+            extractedSubjects[index][field] = value;
+        }
+        
+        function removeSubject(index) {
+            // Remove subject from list
+            extractedSubjects.splice(index, 1);
+            displayExtractedData(extractedSubjects);
+        }
+        
+        function calculateGPA() {
+            // Your existing GPA calculation logic
+            // This would use the extractedSubjects array
+        }
+        
+        // Additional helper functions for image processing would go here
+    </script>
+</body>
+</html>
